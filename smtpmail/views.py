@@ -4,8 +4,10 @@ from django.shortcuts import render
 from rest_framework import viewsets, status
 from .models import SMTPConfig, EmailLog
 from .serializers import SMTPConfigSerializer, EmailLogSerializer
-from rest_framework.decorators import action
+from rest_framework.decorators import action, permission_classes
 from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from django.core.mail import EmailMessage, get_connection
 
 # Create your views here.
 
@@ -15,7 +17,8 @@ class SMTPViewset(viewsets.ModelViewSet):
         serializer_class = SMTPConfigSerializer
     
 
-        @action(detail=True, methods=['get'])
+        @action(detail=True, methods=['post'])
+        @permission_classes([AllowAny])  # Allow anyone to send emails using this endpoint
         # Now get_object() will work because 'pk' (the ID) is in the URL
         def send_email(self, request, pk=None):
             config = self.get_object()
@@ -24,6 +27,10 @@ class SMTPViewset(viewsets.ModelViewSet):
             subject = request.data.get('subject', 'Test Email')
             body = request.data.get('body', 'This is a test.')
             recipients = request.data.get('recipients', []) # Should be a list
+
+            # Ensure recipients is a list
+            if isinstance(recipients, str):
+                recipients = [recipients]
 
             if not recipients:
                 return Response({'error': 'No recipients provided'}, status=status.HTTP_400_BAD_REQUEST)
@@ -40,7 +47,11 @@ class SMTPViewset(viewsets.ModelViewSet):
 
             # 2. Send Email
                 email = EmailMessage(
-                        subject, body, config.username, recipients, connection=connection
+                        subject = subject,
+                        body = body,
+                        from_email = config.username,
+                        to = recipients,
+                        connection = connection
                 )
                 email.send()
 
@@ -54,4 +65,5 @@ class SMTPViewset(viewsets.ModelViewSet):
 
                 return Response({'status': 'Email sent!'}, status=status.HTTP_200_OK)
             except Exception as e:
+                # Log the actual error for debugging
                 return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
