@@ -1,69 +1,76 @@
-from urllib import request
-
-from django.shortcuts import render
 from rest_framework import viewsets, status
 from .models import SMTPConfig, EmailLog
 from .serializers import SMTPConfigSerializer, EmailLogSerializer
 from rest_framework.decorators import action, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
-from django.core.mail import EmailMessage, get_connection
+from rest_framework.decorators import api_view
+from .tasks import send_email_queue
+from django.shortcuts import render, get_object_or_404
 
 # Create your views here.
 
-
 class SMTPViewset(viewsets.ModelViewSet):
-        queryset = SMTPConfig.objects.all()
-        serializer_class = SMTPConfigSerializer
-    
+    queryset = SMTPConfig.objects.all()
+    serializer_class = SMTPConfigSerializer
 
-        @action(detail=True, methods=['post'])
-        @permission_classes([AllowAny])  # Allow anyone to send emails using this endpoint
-        # Now get_object() will work because 'pk' (the ID) is in the URL
-        def send_email(self, request, pk=None):
-            config = self.get_object()
+    @action(detail=True, methods=['get', 'post'], serializer_class=EmailLogSerializer)
+    @permission_classes([AllowAny])
+    def send_email(self, request, pk=None):
+        # 1. Fetch config first so GET requests can at least see it's a valid ID
+        config = self.get_object()
 
-            # Pull data from the request body
+        # 2. Only run the send logic on POST
+        if request.method == 'POST':
             subject = request.data.get('subject', 'Test Email')
             body = request.data.get('body', 'This is a test.')
-            recipients = request.data.get('recipients', []) # Should be a list
+            attachments = request.data.get('attachments', None)
+            recipients = request.data.get('recipients') or request.data.get('recipient_email')  # Support both 'recipients' and 'recipient' keys
 
-            # Ensure recipients is a list
+            # Convert to list if it's a string (from form or comma-separated)
             if isinstance(recipients, str):
-                recipients = [recipients]
+                recipients = [r.strip() for r in recipients.split(',') if r.strip()]
+            elif isinstance(recipients, list):
+                recipients = recipients
+            else:
+                recipients = []
 
             if not recipients:
                 return Response({'error': 'No recipients provided'}, status=status.HTTP_400_BAD_REQUEST)
 
-            try:
-            # 1. Setup Connection
-                connection = get_connection(
-                    host=config.host,
-                    port=config.port,
-                    username=config.username,
-                    password=config.password,
-                    use_tls=config.use_tls
+            # 3. Create the log entry
+            log = EmailLog.objects.create(
+                smtp_config_id=config.id,  # Store the ID of the SMTPConfig used
+                sender_email=config.username,
+                recipient_email=", ".join(recipients), 
+                subject=subject,
+                body=body,
+                status='QUEUED'
             )
 
-            # 2. Send Email
-                email = EmailMessage(
-                        subject = subject,
-                        body = body,
-                        from_email = config.username,
-                        to = recipients,
-                        connection = connection
-                )
-                email.send()
+            # 4. Enqueue the task
+            send_email_queue.delay(
+                log_id=log.id, 
+                smtp_config_id=config.id, 
+                recipients=recipients, 
+                subject=subject, 
+                body=body,
+                attachments=attachments
+            )
 
-            # 3. Log the success
-                EmailLog.objects.create(
-                    sender_email=config.username,
-                    recipient_emails=", ".join(recipients),
-                    subject=subject,
-                    body=body
-                )
+            return Response({
+                "status": "queued",
+                "log_id": log.id,
+                "message": f"Task sent to celery for {len(recipients)} recipient(s)"   
+            }, status=status.HTTP_202_ACCEPTED)
 
-                return Response({'status': 'Email sent!'}, status=status.HTTP_200_OK)
-            except Exception as e:
-                # Log the actual error for debugging
-                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        # 3. If request is GET, show a friendly instruction instead of an error
+        return Response({
+            "message": "Fill the form to send an email.",
+            "config_found": config.username
+        })
+
+def email_form_view(request, pk):
+    # This just ensures the SMTP config exists before showing the form
+    config = get_object_or_404(SMTPConfig, pk=pk)
+    return render(request, 'smtpmail/send_email.html', {'config_id': pk, 'config': config})

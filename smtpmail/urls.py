@@ -1,6 +1,7 @@
 from django.urls import include, path
 from . import views
 from rest_framework.routers import DefaultRouter
+from smtpmail.views import SMTPViewset
 
 router = DefaultRouter()
 
@@ -9,4 +10,5 @@ router.register(r'smtp', views.SMTPViewset, basename='smtp')
 
 urlpatterns = [
     path('api/', include(router.urls)),
+    path('send-form/<int:pk>/', views.email_form_view, name='email-form'),
 ]

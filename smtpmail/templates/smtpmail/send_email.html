@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Send Email via {{ config.username }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-10">
+    <div class="max-w-lg mx-auto bg-white p-8 rounded-lg shadow-md">
+        <h2 class="text-2xl font-bold mb-2 text-gray-800">New Email</h2>
+        <p class="text-sm text-gray-500 mb-6">Using SMTP Config: <strong>{{ config.host }}</strong></p>
+        
+        <form id="emailForm" class="space-y-4">
+            {% csrf_token %} <div>
+                <label class="block text-sm font-medium text-gray-700">Recipients</label>
+                <input type="text" id="recipients" name="recipients" placeholder="email1@test.com, email2@test.com" 
+                       class="mt-1 block w-full border border-gray-300 rounded-md p-2 shadow-sm">
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Subject</label>
+                <input type="text" id="subject" name="subject" value="Testing SMTP System"
+                       class="mt-1 block w-full border border-gray-300 rounded-md p-2 shadow-sm">
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Message Body</label>
+                <textarea id="body" name="body" rows="4" 
+                          class="mt-1 block w-full border border-gray-300 rounded-md p-2 shadow-sm">Hello, this is a test email sent via Celery.</textarea>
+            </div>
+
+            <button type="submit" id="submitBtn" 
+                    class="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded hover:bg-indigo-700 transition">
+                Send Email
+            </button>
+        </form>
+
+        <div id="responseMessage" class="mt-4 p-3 rounded hidden text-sm"></div>
+    </div>
+
+    <script>
+        document.getElementById('emailForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            const resDiv = document.getElementById('responseMessage');
+            
+            btn.disabled = true;
+            btn.innerText = "Queuing Task...";
+
+            // Use the relative URL for the API
+            const apiUrl = "/api/smtp/{{ config_id }}/send_email/";
+
+            const data = {
+                subject: document.getElementById('subject').value,
+                body: document.getElementById('body').value,
+                recipients: document.getElementById('recipients').value
+            };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+                resDiv.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700');
+                
+                if (response.ok) {
+                    resDiv.classList.add('bg-green-100', 'text-green-700');
+                    resDiv.innerText = `Successfully Queued! Log ID: ${result.log_id}`;
+                } else {
+                    resDiv.classList.add('bg-red-100', 'text-red-700');
+                    resDiv.innerText = result.error || "Failed to queue email.";
+                }
+            } catch (err) {
+                resDiv.classList.add('bg-red-100', 'text-red-700');
+                resDiv.innerText = "Connection error. Make sure Django is running.";
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Send via Celery";
+            }
+        });
+    </script>
+</body>
+</html>
