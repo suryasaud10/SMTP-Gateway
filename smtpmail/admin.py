@@ -5,7 +5,8 @@ from .models import SMTPConfig, EmailLog
 
 @admin.register(SMTPConfig)
 class SMTPConfigAdmin(admin.ModelAdmin):
-    list_display = ('host', 'port', 'username', 'use_tls')
+    list_display = ('id', 'host', 'port', 'username')
+    readonly_fields = ('id',)
     # search_fields = ('host', 'username')
 
 @admin.register(EmailLog)

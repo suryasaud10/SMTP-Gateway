@@ -2,11 +2,13 @@ from django.db import models
 # Create your models here.
 
 class SMTPConfig(models.Model):
+    id = models.AutoField(primary_key=True)  # Explicitly define an auto-incrementing primary key
     host = models.CharField(max_length=255, default='smtp.example.com')
     port = models.IntegerField(default=587)
     username = models.CharField(max_length=255)
     password = models.CharField(max_length=255)
-    use_tls = models.BooleanField(default=True)
+    use_tls = models.BooleanField(default=True, help_text="Use STARTTLS (usually port 587)")
+    use_ssl = models.BooleanField(default=False, help_text="Use Implicit SSL (usually port 465)")
 
     class Meta:
         verbose_name = "SMTP Configuration"
@@ -14,12 +16,6 @@ class SMTPConfig(models.Model):
 
     def __str__(self):
         return f"{self.username}:{self.host}"
-
-
-
-
-
-    
 
 class EmailLog(models.Model):
     STATUS_CHOICES = [
@@ -30,7 +26,7 @@ class EmailLog(models.Model):
      # Store the ID of the SMTPConfig used for this email
     smtp_config_id = models.PositiveBigIntegerField(help_text="ID of the SMTP configuration used for this email") 
 
-    sender_email = models.EmailField()
+    # sender_email = models.EmailField()
     recipient_email = models.EmailField()
     subject = models.CharField(max_length=255)
     body = models.TextField()

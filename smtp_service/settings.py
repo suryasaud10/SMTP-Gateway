@@ -131,6 +131,23 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
+# 1. Fix for "Retry limit exceeded"
+CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
+    'retry_policy': {
+        'timeout': 5.0,
+        'max_retries': 10,     # Higher limit before the worker gives up
+        'interval_start': 0,
+        'interval_step': 0.5,
+        'interval_max': 3.0,
+    }
+}
+
+# 2. Redis specific health checks (important since you use Redis as backend)
+CELERY_REDIS_BACKEND_HEALTH_CHECK_INTERVAL = 30
+
+# 3. Handle broken connections automatically
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
 # Redis Caching (Optional but recommended)
 CACHES = {
     "default": {
@@ -146,7 +163,7 @@ CACHES = {
 # SMTP SETTINGS
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 EMAIL_USE_TLS = True
-EMAIL_HOST = "smtp.gmail.com"
+EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")

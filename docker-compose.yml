@@ -1,0 +1,48 @@
+services:
+  # 1. The Message Broker (RabbitMQ)
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"   # Standard RabbitMQ port
+      - "15672:15672" # Management UI (Optional: access via http://localhost:15672)
+
+  # 2. The Django Web Application
+  web:
+    build: .
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - rabbitmq
+      - db
+
+  # 3. The Celery Worker
+  worker:
+    build: .
+    command: celery -A smtp_service worker --loglevel=info
+    volumes:
+      - .:/code
+    env_file:
+      - .env
+    depends_on:
+      - rabbitmq
+      - web
+
+  # 4. The Database (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${smtp_service_db}
+      - POSTGRES_USER=${smtp_service_user}
+      - POSTGRES_PASSWORD=${smtp_service_password}
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+  radis_data:

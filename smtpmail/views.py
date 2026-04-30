@@ -50,12 +50,12 @@ class SMTPViewset(viewsets.ModelViewSet):
 
             # 4. Enqueue the task
             send_email_queue.delay(
-                log_id=log.id, 
-                smtp_config_id=config.id, 
-                recipients=recipients, 
-                subject=subject, 
-                body=body,
-                attachments=attachments
+                subject=subject,
+                message=body,
+                fromEmail=config.username,
+                recipientList=recipients,
+                emailHostId=host,
+                attachments=attachments,
             )
 
             return Response({
