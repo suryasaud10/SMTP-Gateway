@@ -10,5 +10,5 @@ router.register(r'smtp', views.SMTPViewset, basename='smtp')
 
 urlpatterns = [
     path('api/', include(router.urls)),
-    path('send-form/<int:pk>/', views.email_form_view, name='email-form'),
+    path('send-form/<int:pk>/', views.SendEmailView.as_view(), name='SendEmailView'),
 ]

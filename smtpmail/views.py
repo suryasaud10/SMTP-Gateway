@@ -1,76 +1,100 @@
+from django.db import transaction
 from rest_framework import viewsets, status
-from .models import SMTPConfig, EmailLog
-from .serializers import SMTPConfigSerializer, EmailLogSerializer
-from rest_framework.decorators import action, permission_classes
+from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
-from rest_framework.decorators import api_view
+from django.views.generic.edit import FormView
+from django.shortcuts import get_object_or_404
+from django.contrib import messages
+from django.urls import reverse
+from .models import SMTPConfig, EmailLog
+from .serializers import SMTPConfigSerializer
 from .tasks import send_email_queue
-from django.shortcuts import render, get_object_or_404
+from .forms import EmailComposeForm
 
-# Create your views here.
-
+# 1. API ViewSet for programmatic email sending
 class SMTPViewset(viewsets.ModelViewSet):
     queryset = SMTPConfig.objects.all()
     serializer_class = SMTPConfigSerializer
 
-    @action(detail=True, methods=['get', 'post'], serializer_class=EmailLogSerializer)
-    @permission_classes([AllowAny])
+    @action(detail=True, methods=['post'])
     def send_email(self, request, pk=None):
-        # 1. Fetch config first so GET requests can at least see it's a valid ID
         config = self.get_object()
+        subject = request.data.get('subject', 'Test Email')
+        body = request.data.get('body', 'This is a test.')
+        recipients = request.data.get('recipients')
+        
+        # Handle recipients as string or list
+        if isinstance(recipients, str):
+            recipients = [r.strip() for r in recipients.split(',') if r.strip()]
+        
+        if not recipients:
+            return Response({'error': 'No recipients provided'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. Only run the send logic on POST
-        if request.method == 'POST':
-            subject = request.data.get('subject', 'Test Email')
-            body = request.data.get('body', 'This is a test.')
-            attachments = request.data.get('attachments', None)
-            recipients = request.data.get('recipients') or request.data.get('recipient_email')  # Support both 'recipients' and 'recipient' keys
+        # Create log entry within the transaction
+        log = EmailLog.objects.create(
+            smtp_config=config,
+            sender_email=config.username,
+            recipient_email=", ".join(recipients),
+            subject=subject,
+            body=body,
+            status='QUEUED'
+        )       
 
-            # Convert to list if it's a string (from form or comma-separated)
-            if isinstance(recipients, str):
-                recipients = [r.strip() for r in recipients.split(',') if r.strip()]
-            elif isinstance(recipients, list):
-                recipients = recipients
-            else:
-                recipients = []
+        # Use transaction.on_commit to delay task until DB write is finished
+        transaction.on_commit(lambda: send_email_queue.delay(
+            subject=subject,
+            message=body,
+            fromEmail=config.username,
+            recipientList=recipients,
+            emailHostId=config.id,
+            log_id=log.id
+        ))
+        
+        return Response({
+            "status": "queued",
+            "log_id": log.id,
+            "message": "Email sent to queue"
+        }, status=status.HTTP_202_ACCEPTED)
 
-            if not recipients:
-                return Response({'error': 'No recipients provided'}, status=status.HTTP_400_BAD_REQUEST)
+# ui part
+class SendEmailView(FormView):
+    template_name = 'smtpmail/send_email.html'
+    form_class = EmailComposeForm
 
-            # 3. Create the log entry
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['config'] = get_object_or_404(SMTPConfig, pk=self.kwargs['pk'])
+        return context
+
+    def form_valid(self, form):
+        config = get_object_or_404(SMTPConfig, pk=self.kwargs['pk'])
+        recipient = form.cleaned_data['recipient']
+        subject = form.cleaned_data['subject']
+        message = form.cleaned_data['message']
+        
+        # We use a transaction to ensure the log is saved before the task runs
+        with transaction.atomic():
             log = EmailLog.objects.create(
-                smtp_config_id=config.id,  # Store the ID of the SMTPConfig used
+                smtp_config=config,
                 sender_email=config.username,
-                recipient_email=", ".join(recipients), 
+                recipient_email=recipient,
                 subject=subject,
-                body=body,
+                body=message,
                 status='QUEUED'
             )
 
-            # 4. Enqueue the task
-            send_email_queue.delay(
+            # Trigger Celery (The background version of your shell command)
+            transaction.on_commit(lambda: send_email_queue.delay(
                 subject=subject,
-                message=body,
+                message=message,
                 fromEmail=config.username,
-                recipientList=recipients,
-                emailHostId=host,
-                attachments=attachments,
-            )
+                recipientList=[recipient],
+                emailHostId=config.id,
+                log_id=log.id
+            ))
+        
+        messages.success(self.request, f"Success! Email for {recipient} is now in the queue.")
+        return super().form_valid(form)
 
-            return Response({
-                "status": "queued",
-                "log_id": log.id,
-                "message": f"Task sent to celery for {len(recipients)} recipient(s)"   
-            }, status=status.HTTP_202_ACCEPTED)
-
-        # 3. If request is GET, show a friendly instruction instead of an error
-        return Response({
-            "message": "Fill the form to send an email.",
-            "config_found": config.username
-        })
-
-def email_form_view(request, pk):
-    # This just ensures the SMTP config exists before showing the form
-    config = get_object_or_404(SMTPConfig, pk=pk)
-    return render(request, 'smtpmail/send_email.html', {'config_id': pk, 'config': config})
+    def get_success_url(self):
+        return reverse('email_form_class', kwargs={'pk': self.kwargs['pk']})
