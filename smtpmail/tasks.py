@@ -6,7 +6,6 @@ from django.core.mail import get_connection, EmailMultiAlternatives
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=5, retry_kwargs={"max_retries": 3})
 def send_email_queue(self, subject, message, fromEmail, recipientList, emailHostId, attachments=None, log_id=None):
     from .models import SMTPConfig, EmailLog  
-    
     try:
         try:
             emailHost = SMTPConfig.objects.get(pk=emailHostId)

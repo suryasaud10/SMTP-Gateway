@@ -1,100 +1,64 @@
-from django.db import transaction
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.views.generic.edit import FormView
-from django.shortcuts import get_object_or_404
-from django.contrib import messages
-from django.urls import reverse
+from django.db import transaction
 from .models import SMTPConfig, EmailLog
-from .serializers import SMTPConfigSerializer
+from .serializers import SMTPConfigSerializer, EmailLogSerializer
 from .tasks import send_email_queue
-from .forms import EmailComposeForm
+from django.shortcuts import render
 
-# 1. API ViewSet for programmatic email sending
+class EmailSendSerializer(serializers.Serializer):
+    """This defines exactly what the form should show in the browser."""
+    subject = serializers.CharField(max_length=255, required=True)
+    message = serializers.CharField(required=True)
+    recipient = serializers.CharField(help_text="Enter emails separated by commas", required=True)
+
 class SMTPViewset(viewsets.ModelViewSet):
     queryset = SMTPConfig.objects.all()
     serializer_class = SMTPConfigSerializer
 
-    @action(detail=True, methods=['post'])
+    def get_serializer_class(self):
+        # This tells DRF to show the Email form when on the 'send-form' page
+        if self.action == 'send_email':
+            return EmailSendSerializer
+        return SMTPConfigSerializer
+
+    @action(detail=True, methods=['post'], url_path='send-form')
     def send_email(self, request, pk=None):
         config = self.get_object()
-        subject = request.data.get('subject', 'Test Email')
-        body = request.data.get('body', 'This is a test.')
-        recipients = request.data.get('recipients')
         
-        # Handle recipients as string or list
-        if isinstance(recipients, str):
-            recipients = [r.strip() for r in recipients.split(',') if r.strip()]
+        # Use the serializer to handle the data instead of manual request.data.get
+        serializer = EmailSendSerializer(data=request.data)
         
-        if not recipients:
-            return Response({'error': 'No recipients provided'}, status=status.HTTP_400_BAD_REQUEST)
+        if serializer.is_valid():
+            subject = serializer.validated_data['subject']
+            message = serializer.validated_data['message']
+            recipients_raw = serializer.validated_data['recipient']
+            
+            # Convert string to list
+            recipients = [r.strip() for r in recipients_raw.split(',') if r.strip()]
 
-        # Create log entry within the transaction
-        log = EmailLog.objects.create(
-            smtp_config=config,
-            sender_email=config.username,
-            recipient_email=", ".join(recipients),
-            subject=subject,
-            body=body,
-            status='QUEUED'
-        )       
-
-        # Use transaction.on_commit to delay task until DB write is finished
-        transaction.on_commit(lambda: send_email_queue.delay(
-            subject=subject,
-            message=body,
-            fromEmail=config.username,
-            recipientList=recipients,
-            emailHostId=config.id,
-            log_id=log.id
-        ))
-        
-        return Response({
-            "status": "queued",
-            "log_id": log.id,
-            "message": "Email sent to queue"
-        }, status=status.HTTP_202_ACCEPTED)
-
-# ui part
-class SendEmailView(FormView):
-    template_name = 'smtpmail/send_email.html'
-    form_class = EmailComposeForm
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['config'] = get_object_or_404(SMTPConfig, pk=self.kwargs['pk'])
-        return context
-
-    def form_valid(self, form):
-        config = get_object_or_404(SMTPConfig, pk=self.kwargs['pk'])
-        recipient = form.cleaned_data['recipient']
-        subject = form.cleaned_data['subject']
-        message = form.cleaned_data['message']
-        
-        # We use a transaction to ensure the log is saved before the task runs
-        with transaction.atomic():
+            # Create the log
             log = EmailLog.objects.create(
-                smtp_config=config,
+                smtp_config_id=config.id,
                 sender_email=config.username,
-                recipient_email=recipient,
+                recipient_email=", ".join(recipients),
                 subject=subject,
                 body=message,
                 status='QUEUED'
             )
 
-            # Trigger Celery (The background version of your shell command)
             transaction.on_commit(lambda: send_email_queue.delay(
                 subject=subject,
                 message=message,
                 fromEmail=config.username,
-                recipientList=[recipient],
+                recipientList=recipients,
                 emailHostId=config.id,
                 log_id=log.id
             ))
-        
-        messages.success(self.request, f"Success! Email for {recipient} is now in the queue.")
-        return super().form_valid(form)
 
-    def get_success_url(self):
-        return reverse('email_form_class', kwargs={'pk': self.kwargs['pk']})
+            return render(request, "smtpmail/email_form_success.html")  # Redirect to a success page after queuing the email
+        else:
+                
+        # If the form is missing data, DRF will show exactly which field is empty
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
